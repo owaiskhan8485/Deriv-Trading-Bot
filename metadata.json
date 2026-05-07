@@ -1,0 +1,6 @@
+{
+  "name": "QuantVantage Global - Professional Deriv Terminal",
+  "description": "Advanced algorithmic trading terminal for Deriv, featuring multi-symbol real-time scanning, T1-T4 compounding engine, and modular high-accuracy strategies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
