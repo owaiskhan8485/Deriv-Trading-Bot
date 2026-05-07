@@ -24,38 +24,43 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 export const Overview: React.FC = React.memo(() => {
   const { state, resetSequence, config, updateConfig, toggleAutoPivot, toggleAutoReverse } = useBot();
 
+  const sessionTrades = useMemo(() => {
+    if (!state.sessionStartTime) return state.trades;
+    return state.trades.filter(t => new Date(t.timestamp).getTime() >= (state.sessionStartTime || 0));
+  }, [state.trades, state.sessionStartTime]);
+
   const winStreak = useMemo(() => {
     let streak = 0;
-    for (const t of state.trades) {
+    for (const t of sessionTrades) {
       if (t.won) streak++;
       else break;
     }
     return streak;
-  }, [state.trades]);
+  }, [sessionTrades]);
 
   const stats = [
     { 
       label: 'Session Profit', 
-      value: (state.trades.reduce((acc, t) => {
+      value: (sessionTrades.reduce((acc, t) => {
         const val = typeof t.profit === 'number' ? t.profit : parseFloat(String(t.profit));
         return acc + (isNaN(val) ? 0 : val);
       }, 0)).toFixed(2), 
       icon: BarChart3, 
       color: 'text-cyan-400' 
     },
-    { label: 'Win / Loss', value: `${state.trades.filter(t => t.won).length}W / ${state.trades.filter(t => !t.won).length}L`, icon: state.trades.filter(t => t.won).length >= state.trades.filter(t => !t.won).length ? CheckCircle2 : XCircle, color: 'text-amber-400' },
+    { label: 'Win / Loss', value: `${sessionTrades.filter(t => t.won).length}W / ${sessionTrades.filter(t => !t.won).length}L`, icon: sessionTrades.filter(t => t.won).length >= sessionTrades.filter(t => !t.won).length ? CheckCircle2 : XCircle, color: 'text-amber-400' },
     { label: 'Auto-Reverse', value: state.isReversed ? 'Active 🔄' : 'Normal Logic', icon: Repeat, color: state.isReversed ? 'text-orange-400' : 'text-slate-500' },
     { label: 'Backtest Score', value: state.backtestResult ? `${state.backtestResult.score}/100` : '--', icon: Cpu, color: 'text-emerald-400' },
   ];
 
   const chartData = useMemo(() => {
-    let balance = state.sequenceStartBalance || 0;
-    return [...state.trades].reverse().map((t, i) => {
+    let balance = 0; // Relative session balance for chart
+    return [...sessionTrades].reverse().map((t, i) => {
       const val = typeof t.profit === 'number' ? t.profit : parseFloat(String(t.profit));
       balance += isNaN(val) ? 0 : val;
       return { name: i + 1, profit: balance };
     });
-  }, [state.trades, state.sequenceStartBalance]);
+  }, [sessionTrades]);
 
   return (
     <div className="space-y-8 max-w-[1400px] mx-auto">
@@ -196,70 +201,92 @@ export const Overview: React.FC = React.memo(() => {
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
         <div className="lg:col-span-3 space-y-8">
-           <AnimatePresence>
-              {state.activeTrade && (
-                 <motion.div 
-                   initial={{ height: 0, opacity: 0 }}
-                   animate={{ height: 'auto', opacity: 1 }}
-                   exit={{ height: 0, opacity: 0 }}
-                   className="mb-8 overflow-hidden"
-                 >
-                    <div className="bg-slate-900 border-2 border-cyan-500 rounded-3xl p-8 relative overflow-hidden shadow-2xl shadow-cyan-500/20">
-                       <div className="flex flex-col md:flex-row justify-between items-center gap-8 relative z-10">
-                          <div className="space-y-2 text-center md:text-left">
-                             <div className="flex items-center gap-3 justify-center md:justify-start">
-                                <span className="bg-cyan-500 text-slate-900 px-3 py-1 rounded-full text-xs font-black animate-pulse">LIVE TRADE</span>
-                                <span className="text-xl font-mono font-black text-white tracking-widest">{state.activeTrade.symbol}</span>
-                             </div>
-                             <div className="flex items-center gap-4 justify-center md:justify-start">
-                                <span className={`text-3xl font-black ${state.activeTrade.direction === 'CALL' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                   {state.activeTrade.direction}
-                                </span>
-                                <span className="text-slate-500 font-mono text-xl">STAKE: ${state.activeTrade.stake}</span>
-                             </div>
-                          </div>
-
-                          <div className="flex gap-12 items-center">
-                             <div className="text-center">
-                                <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1">Entry Spot</p>
-                                <p className="text-2xl font-mono font-bold text-slate-300">{state.activeTrade.entrySpot}</p>
-                             </div>
-                             <div className="text-center">
-                                <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1">Current Spot</p>
-                                <p className={`text-2xl font-mono font-bold transition-colors ${
-                                   (state.activeTrade.direction === 'CALL' && (state.activeTrade.currentSpot || 0) > state.activeTrade.entrySpot) ||
-                                   (state.activeTrade.direction === 'PUT' && (state.activeTrade.currentSpot || 0) < state.activeTrade.entrySpot)
-                                   ? 'text-emerald-400' : 'text-rose-400'
-                                }`}>
-                                   {state.activeTrade.currentSpot || '--'}
-                                </p>
-                             </div>
-                          </div>
-
-                          <div className="text-center md:text-right">
-                             <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1">Estimated P/L</p>
-                             <h3 className={`text-4xl font-mono font-black ${(state.activeTrade.profit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                {(state.activeTrade.profit || 0) >= 0 ? '+' : ''}${state.activeTrade.profit?.toFixed(2) || '0.00'}
-                             </h3>
-                          </div>
+            <AnimatePresence>
+               {(state.activeTrades && state.activeTrades.length > 0) && (
+                  <motion.div 
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="mb-8"
+                  >
+                    <div className="flex items-center justify-between mb-4 px-2">
+                       <div className="flex items-center gap-3">
+                          <span className="flex h-3 w-3 relative">
+                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                             <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500"></span>
+                          </span>
+                          <h3 className="text-sm font-black text-white tracking-[0.2em] uppercase">Active Execution Flight ({state.activeTrades.length})</h3>
                        </div>
-
-                       <div className="absolute bottom-0 left-0 w-full h-1 bg-slate-800">
-                          <motion.div 
-                             key={state.activeTrade.contractId}
-                             className="h-full bg-cyan-500"
-                             initial={{ width: '100%' }}
-                             animate={{ width: '0%' }}
-                             transition={{ 
-                                duration: Math.max(0, (state.activeTrade.expiryTime || 0) - Math.floor(Date.now() / 1000)), 
-                                ease: 'linear' 
-                             }}
-                          />
-                       </div>
+                       <div className="text-[10px] font-mono text-slate-500">REAL-TIME QUANTUM SYNC</div>
                     </div>
-                 </motion.div>
-              )}
-           </AnimatePresence>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                      {state.activeTrades.map((trade) => (
+                        <motion.div 
+                          key={trade.contractId}
+                          layout
+                          initial={{ scale: 0.95, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          className="bg-[#0a121e] border border-cyan-500/30 rounded-xl p-4 relative overflow-hidden group hover:border-cyan-400/60 transition-all duration-300"
+                        >
+                           <div className="flex justify-between items-start relative z-10">
+                              <div className="space-y-0.5">
+                                 <div className="flex items-center gap-2">
+                                    <span className="text-[9px] font-black text-cyan-400 tracking-wider uppercase">{trade.symbol}</span>
+                                 </div>
+                                 <h4 className={`text-base font-black ${trade.direction === 'CALL' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {trade.direction} <span className="text-slate-400 text-xs font-mono ml-1">${trade.stake}</span>
+                                 </h4>
+                              </div>
+                              <div className="text-right">
+                                 <h3 className={`text-lg font-mono font-black tracking-tighter ${(trade.profit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {(trade.profit || 0) >= 0 ? '+' : ''}${trade.profit?.toFixed(2) || '0.00'}
+                                 </h3>
+                              </div>
+                           </div>
+
+                           <div className="flex justify-between items-center mt-3 text-[9px] font-mono relative z-10">
+                              <div className="flex gap-3">
+                                 <div className="flex flex-col">
+                                    <span className="text-slate-500 uppercase font-bold">Entry</span>
+                                    <span className="text-slate-300">{trade.entrySpot}</span>
+                                 </div>
+                                 <div className="flex flex-col">
+                                    <span className="text-slate-500 uppercase font-bold">Live</span>
+                                    <span className={`${
+                                       (trade.direction === 'CALL' && (trade.currentSpot || 0) > trade.entrySpot) ||
+                                       (trade.direction === 'PUT' && (trade.currentSpot || 0) < trade.entrySpot)
+                                       ? 'text-emerald-400' : 'text-rose-400'
+                                    }`}>
+                                       {trade.currentSpot || '--'}
+                                    </span>
+                                 </div>
+                              </div>
+                              <div className="opacity-40 group-hover:opacity-100 transition-opacity">
+                                 <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center">
+                                    {trade.direction === 'CALL' ? <TrendingUp size={14} className="text-emerald-400" /> : <TrendingDown size={14} className="text-rose-400" />}
+                                 </div>
+                              </div>
+                           </div>
+    
+                           <div className="absolute bottom-0 left-0 w-full h-0.5 bg-slate-800/50">
+                              <motion.div 
+                                 key={`${trade.contractId}-timer`}
+                                 className="h-full bg-cyan-500"
+                                 initial={{ width: '100%' }}
+                                 animate={{ width: '0%' }}
+                                 transition={{ 
+                                    duration: Math.max(0, (trade.expiryTime || 0) - Math.floor(Date.now() / 1000)), 
+                                    ease: 'linear' 
+                                 }}
+                              />
+                           </div>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </motion.div>
+               )}
+            </AnimatePresence>
 
            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="bg-[#0d1b2f] border border-slate-800 rounded-3xl p-6 overflow-hidden relative group">

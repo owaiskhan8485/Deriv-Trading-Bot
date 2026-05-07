@@ -12,43 +12,81 @@ export class QuantumPulseAggressor implements IStrategy {
   id = 'quantum_pulse';
 
   analyze(candles: Candle[]): StrategyResult {
-    if (candles.length < 15) {
+    if (candles.length < 30) {
       return { signal: 'HOLD', confidence: 0, indicators: {} };
     }
 
     const closes = candles.map(c => c.close);
+    const highs = candles.map(c => c.high);
+    const lows = candles.map(c => c.low);
     const lastClose = closes[closes.length - 1];
     
-    // RSI (7) - Very fast period for high-frequency pulse detection
-    const rsi = this.calculateRSI(closes, 7);
-    const rsiWeight = isNaN(rsi) ? 50 : rsi;
+    // RSI (7 and 14) Convergence
+    const rsiFast = this.calculateRSI(closes, 7);
+    const rsiSlow = this.calculateRSI(closes, 14);
     
-    // EMA (5 and 13) - Aggressive trend tracking
-    const emaFast = this.calculateEMA(closes, 5);
-    const emaSlow = this.calculateEMA(closes, 13);
+    // EMA Spectrum (High-definition trend)
+    const ema5 = this.calculateEMA(closes, 5);
+    const ema13 = this.calculateEMA(closes, 13);
+    const ema21 = this.calculateEMA(closes, 21);
     
-    const isBullishTrend = emaFast >= emaSlow;
-    const isBearishTrend = emaFast < emaSlow;
-    
-    // Extreme Aggressive Momentum: Pivot around RSI 50
-    const momentumUp = rsiWeight >= 48; 
-    const momentumDown = rsiWeight < 52;
+    // Bollinger Bands for Squeeze detection
+    const bb = this.calculateBollinger(closes, 20, 2);
+    const volatility = (bb.upper - bb.lower) / bb.middle;
+    const isSqueezed = volatility < 0.0005; // Tight range detection
 
-    // Ultra-Aggressive Thresholds: Shift to ensure continuous activity
-    const confidence = isBullishTrend 
-      ? Math.min(99, 65 + (rsiWeight - 35) * 1.5)
-      : Math.min(99, 65 + (65 - rsiWeight) * 1.5);
+    // Trend Alignment
+    const isBullishAlign = ema5 > ema13 && ema13 > ema21;
+    const isBearishAlign = ema5 < ema13 && ema13 < ema21;
+    
+    // Momentum Density
+    const rsiMomentum = (rsiFast > 60 && rsiSlow > 55) ? 'BULL' : (rsiFast < 40 && rsiSlow < 45) ? 'BEAR' : 'NEUTRAL';
 
-    // Final Decision: Bias towards trend but ALWAYS return a signal
-    const finalSignal = (isBullishTrend && rsiWeight >= 45) || rsiWeight < 35 
-      ? TradeDirection.CALL 
-      : TradeDirection.PUT;
+    let signal: TradeDirection = TradeDirection.HOLD;
+    let confidence = 0;
+    let reason = '';
+
+    // Advanced 2026 Logic: Momentum Pulse + Volume Delta Simulation
+    const emaDelta = (ema5 - ema13) / ema13; 
+    const isAccelerating = Math.abs(emaDelta) > 0.0001;
+    
+    // Pulse Intensity
+    const pulseIntensity = Math.abs(rsiFast - 50) + (isSqueezed ? 0 : 20);
+
+    if (!isSqueezed) {
+      if (isBullishAlign && rsiFast > 52 && isAccelerating) {
+        signal = TradeDirection.CALL;
+        confidence = 88 + pulseIntensity / 10;
+        reason = 'Quantum Pulse: Bullish EMA Delta Acceleration + RSI Alignment';
+      } else if (isBearishAlign && rsiFast < 48 && isAccelerating) {
+        signal = TradeDirection.PUT;
+        confidence = 88 + pulseIntensity / 10;
+        reason = 'Quantum Pulse: Bearish EMA Delta Acceleration + RSI Alignment';
+      } else {
+        // High-Precision Mean Reversion
+        if (rsiFast > 82 && rsiSlow > 75) { 
+          signal = TradeDirection.PUT; 
+          confidence = 82; 
+          reason = 'Terminal Overbought Pulse: Anticipating Liquidity Vacuum Reversal'; 
+        }
+        else if (rsiFast < 18 && rsiSlow < 25) { 
+          signal = TradeDirection.CALL; 
+          confidence = 82; 
+          reason = 'Terminal Oversold Pulse: Anticipating Liquidity Vacuum Recovery'; 
+        }
+      }
+    } else {
+      // Squeeze Breakout Anticipation
+      if (rsiFast > 65) { signal = TradeDirection.CALL; confidence = 65; reason = 'Squeeze Expansion: Bullish Bias'; }
+      else if (rsiFast < 35) { signal = TradeDirection.PUT; confidence = 65; reason = 'Squeeze Expansion: Bearish Bias'; }
+      else { reason = 'Quantum Neutral: Squeeze compression active.'; }
+    }
 
     return {
-      signal: finalSignal,
-      confidence: Math.max(70, confidence), // Ensure confidence is always high enough to trade
-      reason: `Quantum Hyper-Activity: ${finalSignal} @ ${rsiWeight.toFixed(1)} Pulse`,
-      indicators: { rsi: rsiWeight, emaFast, emaSlow }
+      signal,
+      confidence: Math.min(99, Math.max(0, confidence)),
+      reason,
+      indicators: { rsiFast, rsiSlow, ema5, ema13, volatility, isSqueezed }
     };
   }
 

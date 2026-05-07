@@ -323,7 +323,14 @@ export const SettingsPanel: React.FC = React.memo(() => {
            </div>
            
            <button 
-              onClick={() => derivService.authorize(config.mode === AccountMode.REAL ? config.realToken : config.demoToken)}
+              onClick={() => {
+                const token = config.mode === AccountMode.REAL ? config.realToken : config.demoToken;
+                if (token && token.trim().length > 5) {
+                  derivService.authorize(token);
+                } else {
+                  alert('Please enter a valid API Token first.');
+                }
+              }}
               className="w-full bg-cyan-500 hover:bg-cyan-600 text-slate-900 py-4 rounded-2xl text-xs font-black transition-all shadow-xl shadow-cyan-500/20 uppercase tracking-widest flex items-center justify-center gap-3 mt-6"
            >
               <Lock size={18} />

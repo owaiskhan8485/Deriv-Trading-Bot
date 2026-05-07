@@ -101,13 +101,21 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isAutoReverseEnabled: false,
       currentRow: 0,
       currentCol: 0,
+      activeTrades: [],
       logs: [],
       marketData: [],
+      historyLoaded: false,
     };
   });
 
   const [isConnected, setIsConnected] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState(false);
+  
+  const isConnectedRef = useRef(false);
+  const isAuthorizedRef = useRef(false);
+
+  useEffect(() => { isConnectedRef.current = isConnected; }, [isConnected]);
+  useEffect(() => { isAuthorizedRef.current = isAuthorized; }, [isAuthorized]);
 
   const compoundingRef = useRef(new CompoundingEngine(config));
   const strategiesRef = useRef<Record<string, IStrategy>>({
@@ -145,6 +153,21 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 1500); // 1.5s for readability but high frequency
     return () => clearInterval(heartbeat);
   }, [state.isRunning]);
+
+  // Automatic Authorization Handler
+  useEffect(() => {
+    if (isConnected && !isAuthorized) {
+      const token = config.mode === AccountMode.REAL ? config.realToken : config.demoToken;
+      if (token && token.trim().length > 5) {
+        addLog(`System identifying as ${config.mode} account. Executing handshake...`, 'info');
+        derivService.authorize(token);
+      } else if (token === '') {
+        addLog('Handshake paused: Waiting for API Token in Settings.', 'warning');
+      } else {
+        addLog('Invalid Token Format. Please check Settings.', 'error');
+      }
+    }
+  }, [isConnected, isAuthorized, config.mode, config.realToken, config.demoToken]);
 
   // Use refs to avoid useEffect dependency hell and listener duplication
   const stateRef = useRef(state);
@@ -230,22 +253,21 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      const chartProfit = compoundingRef.current.getProfitTarget(prev.sequenceStartBalance);
-      const newSeqStartBalance = won ? Number((prev.sequenceStartBalance + chartProfit).toFixed(2)) : prev.sequenceStartBalance;
-
-    const cleanProfit = typeof profit === 'number' ? profit : parseFloat(String(profit));
-    const trade: TradeResult = {
+      const val = typeof profit === 'number' ? profit : parseFloat(String(profit));
+      const trade: TradeResult = {
         won,
-        profit: isNaN(cleanProfit) ? 0 : cleanProfit,
+        profit: isNaN(val) ? 0 : val,
         stake: details.stake || 0,
         level: prev.currentLevel,
         symbol: details.symbol || 'Unknown',
         direction: details.direction || 'Unknown',
         timestamp: new Date(),
-    };
+        contractId: contractId,
+      };
 
-      // Set activeTrade to undefined only if no more open trades
-      const stillTrading = openTradesRef.current > 0;
+      // Merge with existing trades to avoid overwriting session data with stale history
+      const existingTrades = prev.trades.filter(t => t.contractId !== contractId);
+      const newTrades = [trade, ...existingTrades].slice(0, 100);
 
       return {
         ...prev,
@@ -253,30 +275,19 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentSequence: newSequence,
         currentRow,
         currentCol,
-        sequenceStartBalance: newSeqStartBalance,
-        trades: [trade, ...prev.trades].slice(0, 50),
-        activeTrade: stillTrading ? prev.activeTrade : undefined,
+        trades: newTrades,
+        activeTrades: prev.activeTrades.filter(t => t.contractId !== contractId)
       };
     });
   }, []);
+
+  const isBatchingRef = useRef(false);
 
   const processAnalysis = useCallback((data: any) => {
     if (!data || !data.candles) return;
     
     const currentConfig = configRef.current;
-    
-    // Safety check: Only process signals for the primary symbol if we are not in dedicated scanner mode
-    // However, if the user wants "every time" trades, we can let the scanner ALSO trigger trades on the primary symbol
-    // using analysis from other symbols (cross-market signal). But let's stay focused on the primary symbol first.
-    const isQuantumPulse = currentConfig.strategyId === 'quantum_pulse';
-    
-    if (!isQuantumPulse && data.echo_req.ticks_history !== currentConfig.symbol && currentConfig.executionMode !== ExecutionMode.FIRE) {
-      // Still process for allMarketScores update but don't trade
-      const scannerStrategy = strategiesRef.current[currentConfig.strategyId] || strategiesRef.current['price_action_pro'];
-      const scannerRes = scannerStrategy.analyze(data.candles);
-      // ... logic for scores ...
-      return; 
-    }
+    if (!stateRef.current.isRunning || !currentConfig.autoTrade) return;
 
     const strategy = strategiesRef.current[currentConfig.strategyId] || strategiesRef.current['price_action_pro'];
     const rawAnalysis = strategy.analyze(data.candles);
@@ -348,67 +359,74 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const currentState = stateRef.current;
 
+    if (!isConnectedRef.current || !isAuthorizedRef.current) {
+        if (Math.random() > 0.95) addLog('Execution Halted: Waiting for Link/Auth...', 'warning');
+        return;
+    }
+
     // AI Safety Filter
     const isQuotaError = currentState.aiReport?.isQuotaError === true;
     const aiSafetyPass = !currentConfig.useNeuralFilter || 
                          !currentState.aiReport || 
                          currentState.aiReport.recommendation === 'TRADE' ||
-                         isQuotaError; // INTELLIGENT FALLBACK: If AI is hitting quota limits, we bypass to allow Technical Signal trading
+                         isQuotaError;
 
-    const canTrade = currentState.isRunning && !currentState.isAnalyzing && currentConfig.autoTrade && aiSafetyPass;
     const isFireMode = currentConfig.executionMode === ExecutionMode.FIRE;
     const isProfitTaker = currentConfig.executionMode === ExecutionMode.PROFIT_TAKER;
     
+    // STRICT BATCH CONTROL: In FIRE mode, we MUST wait for all trades in the batch to resolve
+    const canStartBatch = openTradesRef.current === 0 && !isBatchingRef.current;
+    
+    // FIRE mode bypasses initial analysis delay
+    const workingIsAnalyzing = isFireMode ? false : currentState.isAnalyzing;
+    const canTrade = currentState.isRunning && !workingIsAnalyzing && currentConfig.autoTrade && aiSafetyPass;
+    
     // In FIRE and PROFIT_TAKER mode, allow continuous entry if signal persists
     const now = Date.now();
-    // Fire mode is much more aggressive: 500ms throttle instead of 2.5s
-    const throttleTime = isFireMode ? 500 : 2500;
-    const isThrottled = (isFireMode || isProfitTaker) && (now - lastFireTimeRef.current < throttleTime);
-    const isQuantumPulseStrategy = currentConfig.strategyId === 'quantum_pulse';
-    const hasRoom = (isFireMode || isProfitTaker || isQuantumPulseStrategy) ? openTradesRef.current < 100 : openTradesRef.current === 0;
+    // Batch throttle to prevent overlap
+    const throttleTime = isFireMode ? 2000 : 2500;
+    const isThrottled = (now - lastFireTimeRef.current < throttleTime);
 
-    if (!hasRoom && !isThrottled && Math.random() > 0.95) {
-       addLog(`PIPELINE: Saturated (${openTradesRef.current} trades). Waiting for resolution...`, 'warning');
+    if (canTrade && !canStartBatch && isFireMode && Math.random() > 0.98) {
+       addLog(`BATCH RESOLUTION: Waiting for active sequence to settle... (${openTradesRef.current} remaining)`, 'info');
     }
 
-    if (canTrade && hasRoom && !isThrottled) {
+    if (canTrade && canStartBatch && !isThrottled) {
       if (analysis.signal !== 'HOLD' && analysis.confidence >= currentConfig.minConfidence) {
         lastFireTimeRef.current = now;
-        addLog(`SIGNAL ACTIVATED: [${analysis.signal}] @ [${analysis.confidence}%]`, 'success');
-        addLog(`Logic: ${analysis.reason}`, 'info');
-
-        const prevLosses = currentState.trades
-          .filter(t => (new Date().getTime() - new Date(t.timestamp).getTime()) < 3600000) 
-          .slice(0, currentState.currentLevel - 1)
-          .reduce((acc, t) => acc + (isNaN(t.profit) ? 0 : (t.won ? 0 : Math.abs(t.stake))), 0);
-
-        const baseStake = currentConfig.executionMode === ExecutionMode.ROW_TABLE_20 
-          ? TRADE_TABLE[currentState.currentRow][currentState.currentCol]
-          : compoundingRef.current.getStakeForLevel(currentState.sequenceStartBalance, currentState.currentLevel, prevLosses);
+        isBatchingRef.current = true;
         
-        const batchSize = (isFireMode || isProfitTaker) ? currentConfig.fireBatchSize : 1;
-        openTradesRef.current += batchSize;
+        const batchSize = isFireMode ? currentConfig.fireBatchSize : (isProfitTaker ? 2 : 1);
+        openTradesRef.current = batchSize;
 
-        addLog(`Initiating ${currentConfig.executionMode} execution phase [Cycle: ${batchSize} Trades]`, 'trade');
+        addLog(`Initiating ${currentConfig.executionMode} [${analysis.signal}]: ${batchSize} Trades`, 'trade');
 
-        for (let i = 0; i < batchSize; i++) {
-          setTimeout(() => {
-            if (!isConnected) {
-               addLog('X-LINK: Connection lost in execution flight. Aborting pulse.', 'error');
-               return;
-            }
-            derivService.send({
-               proposal: 1,
-               amount: baseStake,
-               basis: 'stake',
-               contract_type: analysis.signal,
-               currency: 'USD',
-               duration: currentConfig.durationSeconds, 
-               duration_unit: currentConfig.durationUnit || 's',
-               symbol: currentConfig.symbol,
-            });
-          }, i * 150); 
-        }
+        const targetSymbol = data.echo_req.ticks_history || currentConfig.symbol;
+        
+        let fired = 0;
+        const interval = setInterval(() => {
+          if (fired >= batchSize || !isConnectedRef.current) {
+            clearInterval(interval);
+            isBatchingRef.current = false;
+            return;
+          }
+
+          const baseStake = currentConfig.executionMode === ExecutionMode.ROW_TABLE_20 
+            ? TRADE_TABLE[stateRef.current.currentRow][stateRef.current.currentCol]
+            : compoundingRef.current.getStakeForLevel(stateRef.current.sequenceStartBalance, stateRef.current.currentLevel, 0);
+
+          derivService.send({
+             proposal: 1,
+             amount: baseStake,
+             basis: 'stake',
+             contract_type: analysis.signal,
+             currency: 'USD',
+             duration: currentConfig.durationSeconds, 
+             duration_unit: currentConfig.durationUnit || 's',
+             symbol: targetSymbol,
+          });
+          fired++;
+        }, 400);
       }
     }
   }, []);
@@ -465,10 +483,15 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             description: tx.longcode
           }));
           
-          setState(prev => ({
-            ...prev,
-            statement: syncedEntries
-          }));
+          setState(prev => {
+            // Merge logic: avoid duplicates
+            const existingIds = new Set(prev.statement.map(e => e.referenceId));
+            const newEntries = syncedEntries.filter(e => !existingIds.has(e.referenceId));
+            return {
+              ...prev,
+              statement: [...newEntries, ...prev.statement].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 100)
+            };
+          });
         }
       }
       if (data.msg_type === 'profit_table') {
@@ -478,7 +501,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             won: tx.profit_loss > 0,
             profit: tx.profit_loss,
             stake: tx.buy_price,
-            level: 1, // Default for historical
+            level: 1, 
             symbol: tx.display_name,
             direction: tx.contract_type,
             timestamp: new Date(tx.purchase_time * 1000),
@@ -486,10 +509,14 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             referenceId: tx.transaction_id
           }));
           
-          setState(prev => ({
-            ...prev,
-            trades: syncedTrades
-          }));
+          setState(prev => {
+            const existingIds = new Set(prev.trades.map(t => t.contractId));
+            const newTrades = syncedTrades.filter(t => !existingIds.has(t.contractId));
+            return {
+              ...prev,
+              trades: [...newTrades, ...prev.trades].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 100)
+            };
+          });
         }
       }
       if (data.msg_type === 'balance' && data.balance) {
@@ -525,10 +552,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               derivService.sellContract(poc.contract_id);
             }
 
-            // Update active trade for live monitoring
-            setState(prev => ({
-              ...prev,
-              activeTrade: {
+            const tradeObj = {
                 contractId: poc.contract_id,
                 symbol: poc.display_name,
                 direction: poc.contract_type === 'CALL' ? 'CALL' : 'PUT',
@@ -539,10 +563,23 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 expiryTime: poc.date_expiry,
                 profit: poc.profit,
                 status: poc.status
-              }
-            }));
+            };
+
+            // Update active trade for live monitoring
+            setState(prev => {
+              const otherTrades = prev.activeTrades.filter(t => t.contractId !== poc.contract_id);
+              return {
+                ...prev,
+                activeTrade: tradeObj,
+                activeTrades: [...otherTrades, tradeObj]
+              };
+            });
           } else {
             delete activeContractsRef.current[poc.contract_id];
+            setState(prev => ({
+              ...prev,
+              activeTrades: prev.activeTrades.filter(t => t.contractId !== poc.contract_id)
+            }));
           }
 
             if (poc.is_sold || poc.status === 'won' || poc.status === 'lost') {
@@ -578,7 +615,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unConn();
       unDisc();
     };
-  }, [processAnalysis, handleTradeResult]);
+  }, [processAnalysis, handleTradeResult, isAuthorized]); // Added isAuthorized to trigger sync if it becomes true
 
   // Scanner loop
   useEffect(() => {
@@ -873,7 +910,8 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isRunning: true, 
       isAnalyzing: true, 
       analysisCountdown: 5, 
-      isReversed: false 
+      isReversed: false,
+      sessionStartTime: Date.now()
     }));
     runFullBacktest();
   };

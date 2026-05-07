@@ -35,6 +35,17 @@ export const Dashboard: React.FC = () => {
   const { config, state, startBot, stopBot, isConnected, isAuthorized, updateConfig } = useBot();
   const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'logs' | 'scanner' | 'backtest' | 'positions'>('overview');
 
+  const handleAuthorize = () => {
+    const token = config.mode === AccountMode.REAL ? config.realToken : config.demoToken;
+    if (token && token.trim().length > 5) {
+      derivService.authorize(token);
+    } else {
+      // If token is missing, redirect to settings or show warning
+      setActiveTab('settings');
+      alert('Please enter your API Token in Settings first.');
+    }
+  };
+
   const handleStartStop = () => {
     if (state.isRunning) stopBot();
     else startBot();
@@ -95,7 +106,7 @@ export const Dashboard: React.FC = () => {
 
           {!isAuthorized && (
             <button
-              onClick={() => derivService.authorize(config.mode === AccountMode.REAL ? config.realToken : config.demoToken)}
+              onClick={handleAuthorize}
               className="w-full flex items-center justify-center gap-3 py-4 mb-4 rounded-2xl font-bold bg-amber-500 hover:bg-amber-600 text-slate-900 shadow-xl shadow-amber-500/20 transition-all duration-300"
             >
               <Lock size={20} />
@@ -169,7 +180,7 @@ export const Dashboard: React.FC = () => {
              </div>
              
              <button 
-               onClick={() => derivService.authorize(config.mode === AccountMode.REAL ? config.realToken : config.demoToken)}
+               onClick={handleAuthorize}
                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all border ${
                  isAuthorized 
                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 

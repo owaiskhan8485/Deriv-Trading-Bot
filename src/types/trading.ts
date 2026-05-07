@@ -7,6 +7,7 @@ export type MarketSymbol =
 export enum TradeDirection {
   CALL = 'CALL',
   PUT = 'PUT',
+  HOLD = 'HOLD',
 }
 
 export enum AccountMode {
@@ -141,6 +142,7 @@ export interface BotState {
   currentRow: number;
   currentCol: number;
   activeTrade?: ActiveTrade;
+  activeTrades: ActiveTrade[];
   lastSignal?: string;
   lastConfidence?: number;
   lastPulse?: number;
@@ -152,4 +154,6 @@ export interface BotState {
   isAutoReverseEnabled: boolean;
   logs: TerminalLog[];
   marketData: any[]; // Store latest candles for chart
+  sessionStartTime?: number;
+  historyLoaded: boolean;
 }
