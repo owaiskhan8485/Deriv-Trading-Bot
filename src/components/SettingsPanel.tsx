@@ -55,6 +55,29 @@ export const SettingsPanel: React.FC = React.memo(() => {
 
               <div className="grid grid-cols-1 gap-4">
                   <button 
+                    onClick={() => handleInput('strategyId', 'inqilaab_alpha')}
+                    className={`p-6 rounded-2xl border flex flex-col items-start gap-2 transition-all text-left ${
+                      config.strategyId === 'inqilaab_alpha'
+                        ? 'bg-purple-500/10 border-purple-500/30 shadow-[0_0_20px_rgba(168,85,247,0.1)]'
+                        : 'bg-slate-900/30 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                     <div className="flex items-center justify-between w-full">
+                        <span className="font-bold text-slate-200">Inqilaab Spectrum Alpha (R100)</span>
+                        {config.strategyId === 'inqilaab_alpha' && (
+                          <div className="w-2 h-2 rounded-full bg-purple-400 shadow-[0_0_8px_rgba(168,85,247,0.8)]" />
+                        )}
+                     </div>
+                     <p className="text-[10px] text-purple-500 uppercase font-black tracking-widest flex items-center gap-2">
+                        <Zap size={12} />
+                        2026 INQILAAB SPECTRUM
+                     </p>
+                     <p className="text-xs text-slate-400 leading-relaxed">
+                        Optimized for Volatility 100 Index. Detects liquidity vacuums and identifies high-probability pulse reversals using triple-horizon RSI spectrum.
+                     </p>
+                  </button>
+
+                  <button 
                     onClick={() => handleInput('strategyId', 'price_action_pro')}
                     className={`p-6 rounded-2xl border flex flex-col items-start gap-2 transition-all text-left ${
                       config.strategyId === 'price_action_pro'

@@ -6,6 +6,7 @@ import { derivService } from '../services/derivService';
 import { CompoundingEngine } from '../services/compoundingEngine';
 import { PriceActionStrategy } from '../strategies/priceAction';
 import { QuantumPulseAggressor } from '../strategies/QuantumPulseAggressor';
+import { InqilaabSpectrumAlpha } from '../strategies/InqilaabSpectrumAlpha';
 import { analyzeMarketWithAI } from '../services/aiService';
 
 interface BotContextType {
@@ -121,6 +122,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const strategiesRef = useRef<Record<string, IStrategy>>({
     'price_action_pro': new PriceActionStrategy(),
     'quantum_pulse': new QuantumPulseAggressor(),
+    'inqilaab_alpha': new InqilaabSpectrumAlpha(),
   });
   const scanIndexRef = useRef(0);
   const openTradesRef = useRef(0);
@@ -351,10 +353,10 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setState(prev => ({ 
-      ...prev, 
-      lastSignal: analysis.signal, 
-      lastConfidence: analysis.confidence,
-      marketData: data.echo_req.ticks_history === configRef.current.symbol ? data.candles : prev.marketData
+       ...prev, 
+       lastSignal: analysis.signal, 
+       lastConfidence: analysis.confidence,
+       marketData: data.echo_req.ticks_history === configRef.current.symbol ? data.candles : prev.marketData
     }));
 
     const currentState = stateRef.current;
@@ -384,22 +386,23 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // In FIRE and PROFIT_TAKER mode, allow continuous entry if signal persists
     const now = Date.now();
     // Batch throttle to prevent overlap
-    const throttleTime = isFireMode ? 2000 : 2500;
+    const throttleTime = isFireMode ? 3000 : 2500;
     const isThrottled = (now - lastFireTimeRef.current < throttleTime);
 
     if (canTrade && !canStartBatch && isFireMode && Math.random() > 0.98) {
-       addLog(`BATCH RESOLUTION: Waiting for active sequence to settle... (${openTradesRef.current} remaining)`, 'info');
+       addLog(`SEQUENTIAL BATCH: Queuing next pulse... (${openTradesRef.current} active)`, 'info');
     }
 
     if (canTrade && canStartBatch && !isThrottled) {
-      if (analysis.signal !== 'HOLD' && analysis.confidence >= currentConfig.minConfidence) {
+      if (analysis.signal !== TradeDirection.HOLD && analysis.confidence >= currentConfig.minConfidence) {
         lastFireTimeRef.current = now;
         isBatchingRef.current = true;
         
         const batchSize = isFireMode ? currentConfig.fireBatchSize : (isProfitTaker ? 2 : 1);
         openTradesRef.current = batchSize;
 
-        addLog(`Initiating ${currentConfig.executionMode} [${analysis.signal}]: ${batchSize} Trades`, 'trade');
+        addLog(`INQILAAB PULSE: [${analysis.signal}] @ [${analysis.confidence}%] | Leveling: ${batchSize} Sequence`, 'success');
+        addLog(`Logic: ${analysis.reason}`, 'info');
 
         const targetSymbol = data.echo_req.ticks_history || currentConfig.symbol;
         
@@ -426,7 +429,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
              symbol: targetSymbol,
           });
           fired++;
-        }, 400);
+        }, 150); 
       }
     }
   }, []);
